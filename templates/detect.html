@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VisionID | AI Face Detection</title>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+      :root {
+        --primary: #6366f1;
+        --primary-hover: #4f46e5;
+        --bg-dark: #0f172a;
+        --card-bg: rgba(255, 255, 255, 0.95);
+        --success: #10b981;
+        --error: #ef4444;
+        --warning: #f59e0b;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        font-family: "Inter", -apple-system, sans-serif;
+      }
+
+      body {
+        background-color: var(--bg-dark);
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 20px;
+      }
+
+      .app-card {
+        background: var(--card-bg);
+        width: 100%;
+        max-width: 1000px;
+        border-radius: 24px;
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        overflow: hidden;
+      }
+
+      .viewport-section {
+        padding: 30px;
+        background: #f8fafc;
+      }
+
+      .video-wrapper {
+        position: relative;
+        aspect-ratio: 4/3;
+        background: #000;
+        border-radius: 16px;
+        overflow: hidden;
+      }
+
+      #video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .scan-line {
+        display: none;
+        position: absolute;
+        width: 100%;
+        height: 4px;
+        background: var(--primary);
+        animation: scan 2s linear infinite;
+      }
+
+      @keyframes scan {
+        0% { top: 0; }
+        100% { top: 100%; }
+      }
+
+      .sidebar {
+        padding: 30px;
+        border-left: 1px solid #e2e8f0;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      button {
+        padding: 14px;
+        border-radius: 12px;
+        border: none;
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      .btn-primary {
+        background: var(--primary);
+        color: white;
+      }
+
+      .btn-outline {
+        background: white;
+        border: 1px solid #e2e8f0;
+      }
+
+      .results-panel {
+        background: #fff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 15px;
+        font-size: 0.85rem;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="app-card">
+      <section class="viewport-section">
+        <div class="video-wrapper">
+          <div id="scanLine" class="scan-line"></div>
+          <video id="video" autoplay playsinline></video>
+          <canvas id="canvas" style="display: none"></canvas>
+        </div>
+      </section>
+
+      <aside class="sidebar">
+        <button class="btn-primary" onclick="startCamera()">Start Camera</button>
+        <button class="btn-outline" onclick="stopCamera()">Stop Camera</button>
+
+        <div class="results-panel" id="log">
+          System Ready
+        </div>
+      </aside>
+    </div>
+
+    <script>
+      lucide.createIcons();
+
+      /* 🔐 ADMIN TOKEN (PASTE ONLY TOKEN) */
+      const AUTH_TOKEN =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbkBmeXAuY29tIiwiZXhwIjoxNzcwMDIwOTM1fQ.5lkUC1h89WsjfRe4T_ul4tG54idegZOlz9ZuJa-9Sy0";
+      let video = document.getElementById("video");
+      let canvas = document.getElementById("canvas");
+      let ctx = canvas.getContext("2d");
+      let log = document.getElementById("log");
+      let stream;
+      let detecting = false;
+
+      async function startCamera() {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        setInterval(detectFace, 2000);
+      }
+
+      function stopCamera() {
+        if (stream) {
+          stream.getTracks().forEach(t => t.stop());
+        }
+      }
+
+      async function detectFace() {
+        if (detecting) return;
+        detecting = true;
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+
+        canvas.toBlob(async blob => {
+          const fd = new FormData();
+          fd.append("file", blob, "capture.jpg");
+
+          const res = await fetch("http://127.0.0.1:8000/detect-face", {
+            method: "POST",
+            body: fd,
+          });
+
+          const data = await res.json();
+
+          if (data.faces_detected > 0) {
+            let msg = `Detected ${data.faces_detected} face(s)\n\n`;
+
+            for (const f of data.faces) {
+              if (f.matched) {
+                msg += `Student ${f.student_id}\n`;
+                msg += await markAttendance(f.student_id) + "\n\n";
+              } else {
+                msg += "Unknown face\n\n";
+              }
+            }
+            log.textContent = msg;
+          } else {
+            log.textContent = "Scanning... No face detected";
+          }
+
+          detecting = false;
+        }, "image/jpeg");
+      }
+
+      async function markAttendance(studentId) {
+        const res = await fetch(
+          "http://127.0.0.1:8000/attendance/mark",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${AUTH_TOKEN}`,
+            },
+            body: JSON.stringify({
+              student_id: studentId,
+              date: new Date().toISOString(),
+              status: "Present",
+            }),
+          }
+        );
+
+        const result = await res.json();
+
+        if (!res.ok) {
+          return `❌ ${result.detail}`;
+        }
+
+        return `✅ Attendance marked`;
+      }
+    </script>
+  </body>
+</html>
