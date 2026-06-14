@@ -13,6 +13,7 @@ import json
 from app.api import auth
 from app.api.students import router as students_router
 from app.api.attendance import router as attendance_router
+from app.api.classes import router as classes_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -52,6 +53,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/auth", tags=["👨‍🏫 Authorization"])
 app.include_router(students_router, prefix="/students", tags=["👨‍🎓 Students"])
 app.include_router(attendance_router, prefix="/attendance", tags=["📋 Attendance"])
+app.include_router(classes_router, prefix="/api/classes", tags=["Classes"])
 
 
 # ==================== HEALTH CHECK ====================

@@ -5,16 +5,44 @@ from typing import Union, Dict, List
 from bson import ObjectId
 import re
 
-collection = get_collection("BSCS_8B")
+def resolve_attendance_collection(class_name: str) -> str:
+    """Dynamically resolve collection name for attendance logs, handling hyphen/underscore variations"""
+    if not class_name:
+        return "BSCS_8B"
+    
+    class_name = class_name.strip()
+    from app.core.database import db
+    collections = db.list_collection_names()
+    
+    # Try exact match, e.g. "BSCS-8A"
+    if class_name in collections:
+        return class_name
+        
+    # Try with underscore, e.g. "BSCS_8B"
+    alt_name = class_name.replace("-", "_")
+    if alt_name in collections:
+        return alt_name
+        
+    # Try with hyphen, e.g. "BSCS-8B"
+    alt_name2 = class_name.replace("_", "-")
+    if alt_name2 in collections:
+        return alt_name2
+        
+    # Default fallback to class_name as-is
+    return class_name
 
 class AttendanceCRUD:
+    def __init__(self, class_name: str = "BSCS_8B"):
+        """Initialize AttendanceCRUD with a dynamically resolved class collection"""
+        resolved_name = resolve_attendance_collection(class_name)
+        self.collection = get_collection(resolved_name)
     
     def mark_attendance(self, attendance: Union[AttendanceModel, Dict]):
         """Create/mark attendance record"""
         if isinstance(attendance, AttendanceModel):
-            collection.insert_one(attendance.dict())
+            self.collection.insert_one(attendance.dict())
         else:
-            collection.insert_one(attendance)
+            self.collection.insert_one(attendance)
     
     def check_attendance(self, student_id: str, attendance_date):
         """Check if student already marked for the date"""
@@ -31,11 +59,11 @@ class AttendanceCRUD:
         else:
             query = {"student_id": student_id, "date": attendance_date}
         
-        result = collection.find_one(query)
+        result = self.collection.find_one(query)
         
         # If not found with exact ID, try numeric ID match
         if not result:
-            records = list(collection.find({}))
+            records = list(self.collection.find({}))
             numeric_id = student_id.lstrip('0') if student_id.isdigit() else student_id
             
             for record in records:
@@ -60,14 +88,14 @@ class AttendanceCRUD:
         try:
             # First try as MongoDB ObjectId
             try:
-                result = collection.find_one({"_id": ObjectId(attendance_id)})
+                result = self.collection.find_one({"_id": ObjectId(attendance_id)})
                 if result:
                     return result
             except Exception:
                 pass
             
             # If not a valid ObjectId, try searching by student_id (most recent)
-            result = collection.find_one(
+            result = self.collection.find_one(
                 {"student_id": attendance_id},
                 sort=[("date", -1)]  # Get most recent record
             )
@@ -75,7 +103,7 @@ class AttendanceCRUD:
                 return result
             
             # Try numeric ID match
-            records = list(collection.find({}))
+            records = list(self.collection.find({}))
             numeric_id = attendance_id.lstrip('0') if attendance_id.isdigit() else attendance_id
             
             for record in records:
@@ -93,7 +121,7 @@ class AttendanceCRUD:
     def list_attendance(self, skip: int = 0, limit: int = 10, filters: Dict = None) -> List[Dict]:
         """List attendance records with optional filters"""
         query = filters or {}
-        records = list(collection.find(query).skip(skip).limit(limit))
+        records = list(self.collection.find(query).skip(skip).limit(limit))
         
         # Convert ObjectIds to strings for JSON serialization
         for record in records:
@@ -111,7 +139,7 @@ class AttendanceCRUD:
                 return False
             
             # Update using the _id
-            result = collection.update_one(
+            result = self.collection.update_one(
                 {"_id": record["_id"]},
                 {"$set": update_data}
             )
@@ -128,7 +156,7 @@ class AttendanceCRUD:
                 return False
             
             # Delete using the _id
-            result = collection.delete_one({"_id": record["_id"]})
+            result = self.collection.delete_one({"_id": record["_id"]})
             return result.deleted_count > 0
         except Exception:
             return False

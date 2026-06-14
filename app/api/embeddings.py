@@ -39,7 +39,11 @@ def retrain_embeddings(
         failed = []
         
         for student in students:
-            if student.get("embedding"):
+            if student.get("embeddings"):
+                for emb in student["embeddings"]:
+                    student_ids.append(student["student_id"])
+                    embeddings_list.append(emb)
+            elif student.get("embedding"):
                 student_ids.append(student["student_id"])
                 embeddings_list.append(student["embedding"])
             else:
