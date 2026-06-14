@@ -60,6 +60,8 @@ async def register_student(
     images = [image1, image2, image3, image4, image5]
     image_paths = []
     saved_files = []
+    embeddings_to_save = []
+
     try:
         for idx, file in enumerate(images):
             file_name = f"image{idx + 1}.jpg"
@@ -70,6 +72,17 @@ async def register_student(
             saved_files.append(file_path)
             # Use forward slashes for database consistency
             image_paths.append(f"datasets/{class_name}/{reg_number}/{file_name}")
+
+            # Extract face embedding for this image
+            nparr = np.frombuffer(content, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if img is not None:
+                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                emb = get_embedding(img_rgb)
+                if emb is not None:
+                    if hasattr(emb, "tolist"):
+                        emb = emb.tolist()
+                    embeddings_to_save.append(emb)
     except Exception as e:
         # Cleanup partially written files on error
         for path in saved_files:
@@ -80,6 +93,18 @@ async def register_student(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to save student images: {str(e)}"
+        )
+
+    if not embeddings_to_save:
+        # Clean up files since registration failed
+        for path in saved_files:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+        raise HTTPException(
+            status_code=400,
+            detail="No faces could be detected in any of the 5 uploaded images. Registration aborted."
         )
 
     # 5. Database Isolation: save metadata record in collection named 'students-[class_name]'
@@ -102,6 +127,8 @@ async def register_student(
         "name": name,
         "reg_number": reg_number,
         "image_paths": image_paths,
+        "embedding": embeddings_to_save[0],
+        "embeddings": embeddings_to_save,
         "created_at": datetime.utcnow()
     }
     
@@ -118,6 +145,39 @@ async def register_student(
             status_code=500,
             detail=f"Failed to save student metadata to database: {str(e)}"
         )
+
+    # Update student_embeddings.npy dynamically
+    from app.core.config import EMBEDDINGS_DIR
+    try:
+        EMBEDDINGS_FILE = os.path.join(EMBEDDINGS_DIR, "student_embeddings.npy")
+        os.makedirs(EMBEDDINGS_DIR, exist_ok=True)
+        
+        if os.path.exists(EMBEDDINGS_FILE):
+            data = np.load(EMBEDDINGS_FILE, allow_pickle=True).item()
+            student_ids_list = list(data.get("student_ids", []))
+            embeddings_list = list(data.get("embeddings", []))
+            
+            # Remove any existing entries for this student to prevent duplicates
+            indices_to_keep = [i for i, s_id in enumerate(student_ids_list) if s_id != reg_number]
+            student_ids_list = [student_ids_list[i] for i in indices_to_keep]
+            embeddings_list = [embeddings_list[i] for i in indices_to_keep]
+            
+            # Append all new embeddings
+            for emb in embeddings_to_save:
+                student_ids_list.append(reg_number)
+                embeddings_list.append(np.array(emb, dtype=np.float32))
+            
+            data["student_ids"] = np.array(student_ids_list)
+            data["embeddings"] = np.array(embeddings_list, dtype=np.float32)
+        else:
+            student_ids_list = [reg_number] * len(embeddings_to_save)
+            data = {
+                "student_ids": np.array(student_ids_list),
+                "embeddings": np.array(embeddings_to_save, dtype=np.float32)
+            }
+        np.save(EMBEDDINGS_FILE, data, allow_pickle=True)
+    except Exception as e:
+        logger.error(f"Failed to update student_embeddings.npy: {str(e)}")
 
     return {
         "message": "Student registered successfully",
