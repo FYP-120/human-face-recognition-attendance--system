@@ -1,8 +1,17 @@
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Form, File, UploadFile
 from app.models.student import StudentModel
 from app.crud.student_crud import StudentCRUD
 from app.core.security import get_current_user
+from app.services.face_embedder import get_embedding
 from typing import List
+import os
+import cv2
+import numpy as np
+import subprocess
+import sys
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 crud = StudentCRUD()
@@ -91,3 +100,116 @@ def delete_student(
     
     crud.delete_student(student_id)
     return {"message": "Student deleted successfully", "student_id": student_id}
+
+
+# ==================== ENROLL (AUTOMATED ONBOARDING) ====================
+
+@router.post("/enroll")
+async def enroll_student(
+    name: str = Form(...),
+    roll_number: str = Form(...),
+    image1: UploadFile = File(...),
+    image2: UploadFile = File(...),
+    image3: UploadFile = File(...),
+    image4: UploadFile = File(...),
+    image5: UploadFile = File(...),
+    current_user: str = Depends(get_current_user)
+):
+    """
+    Onboard a new student:
+    1. Saves 5 raw images to datasets/raw/{roll_number}
+    2. Extract a face embedding from the uploaded images for the MongoDB student profile
+    3. Programmatically runs ml.train_embeddings to update student_embeddings.npy
+    4. Registers student metadata and embedding in MongoDB
+    """
+    images = [image1, image2, image3, image4, image5]
+        
+    # Check if student already exists in DB
+    if crud.get_student_by_id(roll_number):
+        raise HTTPException(status_code=400, detail=f"Student with roll number {roll_number} already exists")
+
+    # Create destination directory
+    raw_student_dir = os.path.join("datasets", "raw", roll_number)
+    os.makedirs(raw_student_dir, exist_ok=True)
+
+    embedding = None
+    saved_files = []
+
+    try:
+        # 2. Process and save images, extracting embedding from first valid face
+        for idx, file in enumerate(images):
+            content = await file.read()
+            
+            # Save file
+            file_extension = os.path.splitext(file.filename)[1] or ".jpg"
+            file_name = f"image_{idx + 1}{file_extension}"
+            file_path = os.path.join(raw_student_dir, file_name)
+            
+            with open(file_path, "wb") as f:
+                f.write(content)
+            saved_files.append(file_path)
+
+            # Try to extract face embedding (if not already found)
+            if embedding is None:
+                nparr = np.frombuffer(content, np.uint8)
+                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if img is not None:
+                    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    emb = get_embedding(img_rgb)
+                    if emb is not None:
+                        embedding = emb
+
+        # Reject onboarding if no face was found in any of the 5 images
+        if embedding is None:
+            raise HTTPException(
+                status_code=400, 
+                detail="No face could be detected in any of the 5 uploaded images. Enrollment aborted."
+            )
+
+        # 3. Programmatically trigger ml.train_embeddings
+        try:
+            # Using sys.executable guarantees it runs using the current virtual env's python interpreter
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            subprocess.run(
+                [sys.executable, "-m", "ml.train_embeddings"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env
+            )
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to run train_embeddings: {e.stderr}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to update embeddings cache file: {e.stderr}"
+            )
+
+        # 4. Save student record to MongoDB
+        student_model = StudentModel(
+            student_id=roll_number,
+            name=name,
+            embedding=embedding
+        )
+        crud.create_student(student_model)
+
+        return {
+            "message": "Student enrolled and trained successfully",
+            "student_id": roll_number,
+            "name": name,
+            "images_saved": len(saved_files)
+        }
+
+    except Exception as e:
+        # Cleanup files on general failure to prevent orphaned partial folders
+        if os.path.exists(raw_student_dir):
+            for file in os.listdir(raw_student_dir):
+                try:
+                    os.remove(os.path.join(raw_student_dir, file))
+                except Exception:
+                    pass
+            try:
+                os.rmdir(raw_student_dir)
+            except Exception:
+                pass
+        raise e
