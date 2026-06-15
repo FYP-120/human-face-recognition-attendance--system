@@ -1,374 +1,485 @@
-# Human Face Recognition Attendance System
+# Face Recognition Attendance & Sentiment Analysis Backend Integration Guide
 
-A comprehensive face recognition-based attendance management system built with FastAPI and InsightFace, designed to automate attendance tracking using facial recognition technology.
+Welcome to the definitive integration guide for the **Real-Time Face Recognition Attendance Management System** and the **AI-Powered Sentiment Analysis** backend. This document contains all the architectural, API, and WebSocket details necessary for frontend developers to build client interfaces, authentication workflows, and dashboards.
 
-## 📋 Table of Contents
+---
 
-- [Overview](#overview)
-- [Features](#features)
-- [Technology Stack](#technology-stack)
-- [System Architecture](#system-architecture)
-- [Project Structure](#project-structure)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [API Endpoints](#api-endpoints)
-- [How It Works](#how-it-works)
-- [Development](#development)
+## 1. Project Overview & Architecture
 
-## 🎯 Overview
+This application functions as a high-throughput, real-time facial recognition attendance system with provisions for AI-powered sentiment analysis. It features class-isolated collection matching, dynamic face embedding generation, and live camera streaming over WebSockets.
 
-This project implements a real-time face recognition system for automated attendance marking. It uses deep learning-based face detection and recognition to identify students and record their attendance. The system provides both REST API endpoints and a web interface for easy integration and usage.
+### Tech Stack Details:
+- **FastAPI (Python)**: High-performance ASGI framework for serving API endpoints and managing asynchronous WebSocket connections.
+- **MongoDB**: NoSQL database holding student profiles and logs. Utilizes class-isolated collections (e.g. `students-BSCS-8B` and `attendance-BSCS-8B`) for security, scalability, and zero cross-class data leaks.
+- **MTCNN & FaceNet**: Employed in backend services for highly accurate face detection and 512-dimension face embedding extraction.
+- **RoBERTa Transformer**: Targeted for NLP tasks (such as class feedback/sentiment analysis scoring).
+- **InsightFace**: Runs model pipelines for multi-face localization, alignment, and matching.
 
-## ✨ Features
+---
 
-- **Real-time Face Detection & Recognition**: Detect and identify multiple faces simultaneously
-- **Automated Attendance Marking**: Mark attendance automatically when a face is recognized
-- **Student Management**: Register and manage student records with face embeddings
-- **REST API**: Comprehensive API for integration with other systems
-- **Web Interface**: Simple HTML templates for face detection and attendance marking
-- **Webcam Support**: Real-time attendance marking using webcam
-- **Authentication**: JWT-based authentication for secure API access
-- **Multiple Face Detection**: Process and identify multiple faces in a single image
-- **High Accuracy**: Uses state-of-the-art InsightFace model for face recognition
-- **MongoDB Integration**: Persistent storage for student and attendance records
+## 2. Frontend Developer Integration Guide
 
-## 🛠 Technology Stack
+### Authentication Flow
+The backend uses **JWT Bearer Token** authentication. All secure endpoints require the `Authorization` header populated with the token obtained during login.
 
-### Backend Framework
+#### Step-by-Step Logic Flow:
+1. **Landing/Login Page**: 
+   - Arrive at `/`.
+   - Submit user credentials to `POST /auth/login` as form data.
+   - If credentials are valid, the backend returns a JSON payload containing the JWT token.
+2. **Token Management**:
+   - Store the returned `access_token` securely in client-side state, local storage, or a secure cookie.
+   - Include this token in the header of all subsequent API requests:
+     ```http
+     Authorization: Bearer <your_access_token_here>
+     ```
+3. **Dashboard Access**:
+   - Fetch initial statistics and listings using `GET /students/list` and `GET /attendance/`.
+   - Verify health and configuration using `GET /health` and `GET /api/info`.
 
-- **FastAPI**: Modern, high-performance web framework for building APIs
-- **Uvicorn**: Lightning-fast ASGI server
-- **Python 3.x**: Core programming language
+---
 
-### Face Recognition & Computer Vision
+## 3. Complete API Endpoint Reference
 
-- **InsightFace**: State-of-the-art 2D and 3D face analysis library
-  - Model: `buffalo_l` - High accuracy face recognition model
-  - 512-dimensional face embeddings
-- **OpenCV (cv2)**: Computer vision library for image processing
-- **MTCNN**: Multi-task Cascaded Convolutional Networks for face detection
-- **NumPy**: Numerical computing for embedding operations
+### Authentication Module
 
-### Database
+#### `POST /auth/login`
+Authenticates administration users and returns a JWT bearer token.
+- **Content-Type**: `application/x-www-form-urlencoded`
+- **Request Payload**:
+  ```yaml
+  username: admin@fyp.com
+  password: admin123
+  ```
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "access_token": "eyJhbGciOiJIUzI1NiIsIn...",
+    "token_type": "bearer"
+  }
+  ```
+- **Error Response (401 Unauthorized)**:
+  ```json
+  {
+    "detail": "Invalid credentials"
+  }
+  ```
 
-- **MongoDB**: NoSQL database for storing student and attendance records
-- **PyMongo**: MongoDB driver for Python
+---
 
-### Authentication & Security
+### Student Management Module
 
-- **python-jose**: JWT token creation and verification
-- **JWT (JSON Web Tokens)**: Secure authentication mechanism
-- **HTTPBearer**: FastAPI security scheme
+#### `POST /students/register`
+Registers a new student profile and generates their reference face embeddings.
+- **Authorization**: Required (Bearer Token)
+- **Content-Type**: `multipart/form-data`
+- **Request Payload**:
+  - `name` (string): Full name of the student.
+  - `reg_number` (string): Unique registration ID.
+  - `class_name` (string): Target class collection (e.g., `BSCS-8B`).
+  - `image1`, `image2`, `image3`, `image4`, `image5` (Files): Exactly 5 distinct JPG/PNG images of the student's face.
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "message": "Student registered successfully",
+    "student_id": "22-NTU-CS-1192",
+    "name": "Test Student",
+    "class_name": "BSCS-8B",
+    "collection_name": "students-BSCS-8B",
+    "image_paths": [
+      "datasets/BSCS-8B/22-NTU-CS-1192/image1.jpg",
+      "datasets/BSCS-8B/22-NTU-CS-1192/image2.jpg",
+      "datasets/BSCS-8B/22-NTU-CS-1192/image3.jpg",
+      "datasets/BSCS-8B/22-NTU-CS-1192/image4.jpg",
+      "datasets/BSCS-8B/22-NTU-CS-1192/image5.jpg"
+    ]
+  }
+  ```
+- **Error Responses**:
+  - `400 Bad Request` (Invalid payload structure or no faces detected in any uploaded images).
+  - `401 Unauthorized` (Missing/invalid JWT).
+  - `500 Internal Server Error` (Database or physical write failure).
 
-### Machine Learning & Data Processing
+#### `POST /students/enroll`
+Onboards a new student and triggers automatic system retraining to update the embeddings file cache.
+- **Authorization**: Required (Bearer Token)
+- **Content-Type**: `multipart/form-data`
+- **Request Payload**:
+  - `name` (string): Student name.
+  - `roll_number` (string): Student ID.
+  - `class_name` (string, optional): Target class.
+  - `image1` to `image5` (Files): exactly 5 face images.
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "message": "Student enrolled and trained successfully",
+    "student_id": "22-NTU-CS-1192",
+    "name": "Test Student",
+    "images_saved": 5
+  }
+  ```
 
-- **scikit-learn**: Machine learning utilities for model evaluation
-- **NumPy**: Array operations and cosine similarity calculations
+#### `GET /students/list`
+Lists registered students with class-level filters and page offsets.
+- **Request Parameters**:
+  - `skip` (Query, int): Offset index (Default: 0).
+  - `limit` (Query, int): Max count to return (Default: 10).
+  - `class_name` (Query, string, optional): Limit search to a specific class collection.
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "students": [
+      {
+        "student_id": "22-NTU-CS-1192",
+        "name": "Test Student",
+        "reg_number": "22-NTU-CS-1192",
+        "image_paths": ["datasets/..."]
+      }
+    ],
+    "count": 1
+  }
+  ```
 
-### Configuration & Environment
+#### `GET /students/search/by-name`
+Searches profiles using case-insensitive matching.
+- **Request Parameters**:
+  - `query` (Query, string): Part or full name to search for.
+  - `class_name` (Query, string, optional): Class collection filter.
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "results": [
+      {
+        "student_id": "22-NTU-CS-1192",
+        "name": "Test Student"
+      }
+    ],
+    "count": 1
+  }
+  ```
 
-- **python-dotenv**: Environment variable management
-- **Pydantic**: Data validation and settings management
+#### `GET /students/{student_id}`
+Retrieves a specific student's profile metadata.
+- **Request Parameters**:
+  - `student_id` (Path, string): Registration ID.
+  - `class_name` (Query, string, optional): Target class.
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "student_id": "22-NTU-CS-1192",
+    "name": "Test Student",
+    "reg_number": "22-NTU-CS-1192",
+    "image_paths": ["datasets/..."]
+  }
+  ```
+- **Error Response (404 Not Found)**:
+  ```json
+  {
+    "detail": "Student not found"
+  }
+  ```
 
-### Additional Libraries
+#### `PUT /students/{student_id}`
+Updates details of an existing profile.
+- **Authorization**: Required (Bearer Token)
+- **Request Parameters**:
+  - `student_id` (Path, string): Target student registration ID.
+  - `class_name` (Query, string, optional): Scoped class name.
+  - **Body** (JSON): key-value dictionary representing field updates.
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "message": "Student updated successfully",
+    "student_id": "22-NTU-CS-1192"
+  }
+  ```
 
-- **CORS Middleware**: Cross-Origin Resource Sharing support
-- **tqdm**: Progress bars for training embeddings
+#### `DELETE /students/{student_id}`
+Removes a student profile from the database.
+- **Authorization**: Required (Bearer Token)
+- **Request Parameters**:
+  - `student_id` (Path, string): Target registration ID.
+  - `class_name` (Query, string, optional): Class collection.
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "message": "Student deleted successfully",
+    "student_id": "22-NTU-CS-1192"
+  }
+  ```
 
-## 🏗 System Architecture
+---
 
-### Core Components
+### Attendance Module
 
-1. **API Layer** (`app/api/`)
+#### `POST /attendance/mark`
+Logs attendance status manually for a specific student.
+- **Authorization**: Required (Bearer Token)
+- **Request Parameters**:
+  - `class_name` (Query, string): Targeted class name.
+  - **Body** (JSON):
+    ```json
+    {
+      "student_id": "22-NTU-CS-1192",
+      "name": "Test Student",
+      "status": "Present",
+      "confidence": 1.0
+    }
+    ```
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "message": "Attendance marked successfully",
+    "student_id": "22-NTU-CS-1192",
+    "date": "2026-06-15T08:22:01.123Z"
+  }
+  ```
 
-   - Authentication endpoints
-   - Student management endpoints
-   - Attendance marking endpoints
+#### `POST /attendance/mark-from-image`
+Processes an uploaded image to recognize multiple faces and log attendance dynamically.
+- **Authorization**: Required (Bearer Token)
+- **Content-Type**: `multipart/form-data`
+- **Request Payload**:
+  - `class_name` (Form, string): Target class name.
+  - `file` (File): Image file containing student faces.
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "message": "Image processed successfully",
+    "results": [
+      {
+        "face_number": 1,
+        "bbox": [100, 200, 300, 400],
+        "confidence": 0.89,
+        "student_id": "22-NTU-CS-1192",
+        "name": "Test Student",
+        "status": "recognized",
+        "already_marked": false,
+        "message": "Attendance marked for Test Student"
+      }
+    ],
+    "processed_by": "admin@fyp.com",
+    "timestamp": "2026-06-15T08:22:01.123Z"
+  }
+  ```
 
-2. **Service Layer** (`app/services/`)
+#### `GET /attendance/`
+Lists attendance logs.
+- **Request Parameters**:
+  - `skip` (Query, int): Offset index (Default: 0).
+  - `limit` (Query, int): Max count (Default: 10).
+  - `student_id` (Query, string, optional): Filter by student.
+  - `date` (Query, string, optional): Filter by date (`YYYY-MM-DD`).
+  - `class_name` (Query, string, optional): Filter by class.
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "records": [
+      {
+        "_id": "69fee6...",
+        "student_id": "22-NTU-CS-1192",
+        "name": "Test Student",
+        "date": "2026-06-15T00:00:00Z",
+        "status": "Present",
+        "confidence": 0.95
+      }
+    ],
+    "count": 1
+  }
+  ```
 
-   - `face_detector.py`: Face detection using MTCNN
-   - `face_embedder.py`: Face embedding generation using InsightFace
-   - `face_matcher.py`: Cosine similarity-based face matching
-   - `attendance_logic.py`: Business logic for attendance operations
+#### `GET /attendance/{attendance_id}`
+Retrieves a specific attendance record by record ID or student ID.
+- **Authorization**: Required (Bearer Token)
+- **Request Parameters**:
+  - `attendance_id` (Path, string): Record ID or Student ID.
+  - `class_name` (Query, string, optional): Scoped class name.
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "_id": "69fee6...",
+    "student_id": "22-NTU-CS-1192",
+    "name": "Test Student",
+    "date": "2026-06-15T00:00:00Z",
+    "status": "Present",
+    "confidence": 0.95
+  }
+  ```
 
-3. **CRUD Layer** (`app/crud/`)
+#### `PUT /attendance/{attendance_id}`
+Updates details of an attendance record.
+- **Authorization**: Required (Bearer Token)
+- **Request Parameters**:
+  - `attendance_id` (Path, string): Target record ID.
+  - `class_name` (Query, string, optional): Target class.
+  - **Body** (JSON): Key-value fields to update (e.g. `{"status": "Absent"}`).
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "message": "Attendance updated successfully",
+    "attendance_id": "69fee6..."
+  }
+  ```
 
-   - `student_crud.py`: Student database operations
-   - `attendance_crud.py`: Attendance database operations
+#### `DELETE /attendance/{attendance_id}`
+Deletes an attendance record.
+- **Authorization**: Required (Bearer Token)
+- **Request Parameters**:
+  - `attendance_id` (Path, string): Target record ID.
+  - `class_name` (Query, string, optional): Scoped class name.
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "message": "Attendance record deleted successfully",
+    "attendance_id": "69fee6..."
+  }
+  ```
 
-4. **Models** (`app/models/`)
+---
 
-   - `student.py`: Student data models
-   - `attendance.py`: Attendance data models
-   - `user.py`: User authentication models
+### Class Management Module
 
-5. **Core** (`app/core/`)
-   - `config.py`: Configuration management
-   - `database.py`: MongoDB connection
-   - `security.py`: JWT authentication logic
+#### `POST /api/classes/create`
+Initializes a new class and programmatically creates dedicated student and attendance collections for it in MongoDB.
+- **Content-Type**: `application/json`
+- **Request Payload**:
+  ```json
+  {
+    "class_name": "BSCS-8B"
+  }
+  ```
+- **Success Response (200 OK)**:
+  ```json
+  {
+    "message": "Class 'BSCS-8B' created successfully",
+    "class_name": "BSCS-8B",
+    "collection_name": "BSCS-8B",
+    "created": true
+  }
+  ```
+- **Error Response (400 Bad Request)**:
+  ```json
+  {
+    "detail": "Class name must only contain alphanumeric characters, hyphens, underscores, or periods."
+  }
+  ```
 
-### Data Flow
+---
 
+### System & Health Endpoints
+
+- `GET /health`: Monitor server status (`{"status": "healthy"}`).
+- `GET /api/info`: Obtain base path, version, and endpoints metadata.
+- `GET /test`: Connectivity handshake (`{"status": "ok", "message": "Server is running"}`).
+- `GET /api`: Versioning status (`{"version": "2.0.0", "base_path": "/api/v1"}`).
+
+---
+
+## 4. Deep-Dive: Live Camera & WebSocket Protocol
+
+### Overview
+The frontend captures canvas frames at a regular interval (e.g., 2 frames per second) and streams them to the backend over WebSockets. The backend executes face recognition on each frame and streams back identification matches, drawing boxes, and confirmation statuses.
+
+### `/camera` GET Endpoint
+This route (`http://127.0.0.1:8000/camera`) is used to render the full camera streaming interface.
+- **Query Parameters**:
+  - `class_tag` (Query, string, optional): If provided, pre-selects the class collection and immediately starts the camera.
+  - `class_name` (Query, string, optional): Alternative name parameter.
+- **Jinja-style Injection**:
+  Before rendering, the backend retrieves all MongoDB student collection names (`students-*`), resolves available class identifiers, and injects them as a JSON list into the DOM:
+  ```javascript
+  window.AVAILABLE_CLASSES = ["BSCS-8A", "BSCS-8B", "BSCS-8C"];
+  ```
+
+### WebSocket Protocol: `/ws/camera/{session_id}`
+Connect to: `ws://127.0.0.1:8000/ws/camera/{session_id}?class_tag={chosenClass}`
+
+#### Class Isolation Logic Flow:
+1. When connecting, the frontend appends the query parameter `?class_tag=BSCS-8B` (or `?class_name=BSCS-8B`) to the connection string.
+2. The backend extracts `class_tag` (or `class_name`).
+3. If provided, the backend:
+   - Restricts references dynamically.
+   - Loads the global embedding cache `.npy` file.
+   - Queries `student_crud.list_students(limit=10000, class_name=target_class)` to obtain student IDs registered under that class.
+   - Filters the candidate embeddings matrix to only include vectors mapped to those IDs.
+   - Queries `student_crud.get_student_by_id(..., class_name=target_class)` to display names.
+   - Records attendance logs using `AttendanceCRUD(target_class)` directly inside the class attendance collection.
+
+#### Protocol Messages (JSON):
+
+##### 1. Client to Server - Send Frame
+```json
+{
+  "type": "frame",
+  "data": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMC...",
+  "timestamp": "2026-06-15T08:22:01.123Z"
+}
 ```
-Image Upload → Face Detection (MTCNN/InsightFace) →
-Face Embedding (InsightFace buffalo_l) →
-Cosine Similarity Matching →
-Student Identification →
-Attendance Record Creation →
-Database Storage (MongoDB)
+*Note: `data` is a base64 encoded JPG frame string.*
+
+##### 2. Client to Server - Keepalive / End
+- **Ping**: `{"type": "ping"}`
+- **End Session**: `{"type": "end"}`
+
+##### 3. Server to Client - Match Results
+```json
+{
+  "type": "match_result",
+  "timestamp": "2026-06-15T08:22:01.554Z",
+  "faces_detected": 1,
+  "newly_marked": 1,
+  "marked_today": 1,
+  "matches": [
+    {
+      "student_id": "22-NTU-CS-1192",
+      "name": "Test Student",
+      "confidence": 0.86,
+      "bbox": [120, 240, 320, 440],
+      "status": "newly_marked"
+    }
+  ]
+}
+```
+*Possible `status` values in matches:*
+- `"newly_marked"`: Match is positive, database attendance successfully logged.
+- `"already_marked"`: Match is positive, attendance was already logged today.
+- `"unknown"`: Match confidence falls below threshold (`0.6`).
+
+##### 4. Server to Client - Pong Response
+```json
+{
+  "type": "pong"
+}
 ```
 
-## 📁 Project Structure
-
-```
-FYP-120/
-├── app/
-│   ├── api/                    # API endpoints
-│   │   ├── auth.py            # Authentication routes
-│   │   ├── students.py        # Student management routes
-│   │   └── attendance.py      # Attendance routes
-│   ├── core/                  # Core configuration
-│   │   ├── config.py          # Environment configuration
-│   │   ├── database.py        # MongoDB connection
-│   │   └── security.py        # JWT authentication
-│   ├── crud/                  # Database operations
-│   │   ├── student_crud.py    # Student CRUD operations
-│   │   └── attendance_crud.py # Attendance CRUD operations
-│   ├── models/                # Data models
-│   │   ├── student.py         # Student models
-│   │   ├── attendance.py      # Attendance models
-│   │   └── user.py            # User models
-│   ├── services/              # Business logic
-│   │   ├── face_detector.py   # Face detection service
-│   │   ├── face_embedder.py   # Face embedding service
-│   │   ├── face_matcher.py    # Face matching service
-│   │   └── attendance_logic.py# Attendance logic
-│   ├── utils/                 # Utility functions
-│   │   ├── image_utils.py     # Image processing utilities
-│   │   └── logger.py          # Logging configuration
-│   └── main.py                # FastAPI application entry point
-├── ml/                        # Machine learning scripts
-│   ├── train_embeddings.py    # Generate face embeddings
-│   ├── evaluate_model.py      # Model evaluation
-│   └── requirements.txt       # ML dependencies
-├── scripts/                   # Utility scripts
-│   ├── register_student.py    # Student registration
-│   ├── mark_attendance.py     # Manual attendance marking
-│   └── webcam_attendance.py   # Real-time webcam attendance
-├── datasets/                  # Data storage
-│   ├── raw/                   # Student face images
-│   │   └── [student_id]/      # Individual student folders
-│   └── embeddings/            # Generated embeddings
-│       └── student_embeddings.npy
-├── templates/                 # HTML templates
-│   ├── index.html            # Main page
-│   └── detect.html           # Detection interface
-├── requirements.txt          # Main dependencies
-└── README.md                 # This file
+##### 5. Server to Client - Error Message
+```json
+{
+  "type": "error",
+  "message": "Embeddings not found"
+}
 ```
 
-## 📥 Installation
+---
 
-### Prerequisites
+## 5. Local Setup & Environment Constants
 
-- Python 3.8 or higher
-- MongoDB (local or cloud instance)
-- Webcam (optional, for real-time attendance)
-
-### Step 1: Clone the Repository
-
-```bash
-git clone <repository-url>
-cd FYP-120
-```
-
-### Step 2: Create Virtual Environment
-
-```bash
-python -m venv venv
-# On Windows
-venv\Scripts\activate
-# On Linux/Mac
-source venv/bin/activate
-```
-
-### Step 3: Install Dependencies
-
-```bash
-# Install main dependencies
-pip install -r requirements.txt
-
-# Install ML dependencies
-pip install -r ml/requirements.txt
-```
-
-### Step 4: Set Up MongoDB
-
-Ensure MongoDB is running locally or have a MongoDB connection URI ready.
-
-## ⚙ Configuration
-
-Create a `.env` file in the project root:
-
+To run this backend locally, configure a `.env` file at the root:
 ```env
-# MongoDB Configuration
-MONGO_URI=mongodb://localhost:27017
-DB_NAME=attendance_db
-
-# Embeddings Directory
-EMBEDDINGS_DIR=datasets/embeddings
-
-# JWT Configuration (in app/core/security.py)
-SECRET_KEY=your-secret-key-here
+MONGO_URI=mongodb://localhost:27017/attendance_db
+SECRET_KEY=yoursecretkeyhere
 ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=60
+ACCESS_TOKEN_EXPIRE_MINUTES=30
 ```
 
-## 🚀 Usage
-
-### 1. Prepare Student Data
-
-Create folders for each student in `datasets/raw/`:
-
-```
-datasets/raw/
-├── 1186/
-│   ├── img1.jpg
-│   ├── img2.jpg
-│   └── img3.jpg
-├── 1192/
-│   └── ...
-```
-
-### 2. Train Face Embeddings
-
-Generate face embeddings from student images:
-
+### Spin up backend server:
 ```bash
-python -m ml.train_embeddings
-```
+# Activate virtual environment
+# Windows PowerShell:
+.\myvenv313\Scripts\Activate.ps1
 
-This will create `datasets/embeddings/student_embeddings.npy` containing all face embeddings.
-
-### 3. Start the API Server
-
-```bash
+# Run development server
 uvicorn app.main:app --reload
 ```
-
-The API will be available at `http://localhost:8000`
-
-### 4. Access API Documentation
-
-Visit `http://localhost:8000/docs` for interactive API documentation (Swagger UI)
-
-### 5. Real-time Webcam Attendance
-
-```bash
-python scripts/webcam_attendance.py
-```
-
-Press 's' to capture and mark attendance, 'q' to quit.
-
-## 📡 API Endpoints
-
-### Authentication
-
-- `POST /auth/login` - User login
-- `POST /auth/register` - User registration
-
-### Students
-
-- `GET /students/` - List all students
-- `GET /students/{student_id}` - Get student details
-- `POST /students/` - Register new student
-- `PUT /students/{student_id}` - Update student
-- `DELETE /students/{student_id}` - Delete student
-
-### Attendance
-
-- `POST /attendance/mark` - Mark attendance manually
-- `POST /detect-face` - Detect and match faces, mark attendance
-- `GET /attendance/` - Get attendance records
-- `GET /attendance/student/{student_id}` - Get student attendance history
-- `GET /attendance/date/{date}` - Get attendance by date
-
-## 🔧 How It Works
-
-### Face Recognition Pipeline
-
-1. **Image Capture**: Image is captured via upload or webcam
-2. **Face Detection**: InsightFace detects faces in the image
-3. **Embedding Generation**: Each face is converted to a 512-dimensional embedding vector
-4. **Similarity Matching**: Cosine similarity is computed between input embedding and stored embeddings
-5. **Threshold Check**: If similarity > 0.6, face is recognized
-6. **Student Identification**: Matched embedding is linked to student ID
-7. **Attendance Recording**: Attendance record is created with timestamp
-
-### Cosine Similarity Formula
-
-The system uses cosine similarity to match faces:
-
-$$\text{similarity} = \frac{\mathbf{a} \cdot \mathbf{b}}{||\mathbf{a}|| \times ||\mathbf{b}||}$$
-
-Where:
-
-- $\mathbf{a}$ = Input face embedding
-- $\mathbf{b}$ = Stored face embedding
-- Threshold = 0.6 (adjustable)
-
-### InsightFace Model
-
-- **Model**: buffalo_l
-- **Embedding Size**: 512 dimensions
-- **Detection Size**: 640x640 pixels
-- **Provider**: CPUExecutionProvider (GPU support available)
-
-## 👨‍💻 Development
-
-### Running Tests
-
-```bash
-# Run model evaluation
-python -m ml.evaluate_model
-```
-
-### Adding New Students
-
-```bash
-python scripts/register_student.py
-```
-
-### Code Structure Guidelines
-
-- **API Routes**: Add new endpoints in `app/api/`
-- **Business Logic**: Implement in `app/services/`
-- **Database Operations**: Add to `app/crud/`
-- **Data Models**: Define in `app/models/`
-- **Configuration**: Update `app/core/config.py`
-
-### Key Libraries Usage
-
-- **FastAPI**: Async request handling, automatic documentation
-- **InsightFace**: Face analysis and embedding generation
-- **OpenCV**: Image preprocessing and manipulation
-- **MongoDB**: Document-based storage for flexible data schema
-- **JWT**: Stateless authentication for API security
-
-## 📝 Notes
-
-- Ensure good lighting conditions for accurate face detection
-- Use multiple images per student for better recognition accuracy
-- Adjust similarity threshold based on your requirements
-- The system can detect and identify multiple faces simultaneously
-- Embeddings need to be regenerated when new students are added
-
-## 🤝 Contributors
-
-FYP Group - NTU
-
-## 📄 License
-
-This project is part of a Final Year Project (FYP) at NTU.
+By default, the server starts up at: `http://127.0.0.1:8000`
+Auto-generated swagger interactive docs can be accessed at: `http://127.0.0.1:8000/api/docs`
