@@ -317,6 +317,42 @@ def delete_class(class_name: str, current_user: str = Depends(get_current_user))
         
     return {"message": f"Class '{class_name}' deleted successfully"}
 
+@app.get("/dashboard/stats", tags=["Dashboard"])
+def get_dashboard_stats(current_user: str = Depends(get_current_user)):
+    """Fetch aggregated total students and unique classes count across MongoDB collections"""
+    from fastapi import HTTPException
+    from app.core.database import db
+    try:
+        collections = db.list_collection_names()
+        classes = []
+        for col in collections:
+            if col.startswith("students-"):
+                classes.append(col.replace("students-", ""))
+            elif col not in ["users", "admin", "system.indexes", "students", "attendance"]:
+                classes.append(col.replace("_", "-"))
+                
+        unique_classes = sorted(list(set(classes)))
+        
+        total_students = 0
+        for cls in unique_classes:
+            col_name = f"students-{cls}"
+            matched_cols = {col_name}
+            alt_col = f"students-{cls.replace('-', '_')}"
+            if alt_col in collections:
+                matched_cols.add(alt_col)
+            
+            for m_col in matched_cols:
+                if m_col in collections:
+                    total_students += db[m_col].count_documents({})
+                    
+        return {
+            "total_students": total_students,
+            "active_classes": len(unique_classes)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load dashboard metrics: {str(e)}")
+
+
 @app.get("/camera", response_class=HTMLResponse, tags=["UI"])
 def camera_interface(class_tag: Optional[str] = Query(None), class_name: Optional[str] = Query(None)):
     """Live camera attendance interface"""
