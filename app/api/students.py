@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, Query, Form, File, UploadFile
-from app.models.student import StudentModel
+from app.models.student import StudentModel, StudentsListResponse
 from app.crud.student_crud import StudentCRUD
 from app.core.security import get_current_user
 from app.services.face_embedder import get_embedding
@@ -191,14 +191,14 @@ async def register_student(
 
 # ==================== READ ====================
 
-@router.get("/list")
+@router.get("/list", response_model=StudentsListResponse)
 def list_students(
     skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100),
+    limit: int = Query(10, ge=1, le=200),
     class_name: Optional[str] = Query(None)
 ):
     """Get all students with pagination"""
-    class_crud = StudentCRUD(class_name) if class_name else crud
+    class_crud = StudentCRUD(f"students-{class_name}") if class_name else crud
     students = class_crud.list_students(skip, limit)
     return {"students": students, "count": len(students)}
 
@@ -209,7 +209,7 @@ def search_students_by_name(
     class_name: Optional[str] = Query(None)
 ):
     """Search students by name"""
-    class_crud = StudentCRUD(class_name) if class_name else crud
+    class_crud = StudentCRUD(f"students-{class_name}") if class_name else crud
     results = class_crud.search_by_name(query)
     if not results:
         raise HTTPException(status_code=404, detail="No students found")
@@ -222,7 +222,7 @@ def get_student(
     class_name: Optional[str] = Query(None)
 ):
     """Get a specific student by ID"""
-    class_crud = StudentCRUD(class_name) if class_name else crud
+    class_crud = StudentCRUD(f"students-{class_name}") if class_name else crud
     student = class_crud.get_student_by_id(student_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -239,7 +239,7 @@ def update_student(
     current_user: str = Depends(get_current_user)
 ):
     """Update student information"""
-    class_crud = StudentCRUD(class_name) if class_name else crud
+    class_crud = StudentCRUD(f"students-{class_name}") if class_name else crud
     student = class_crud.get_student_by_id(student_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -260,7 +260,7 @@ def delete_student(
     current_user: str = Depends(get_current_user)
 ):
     """Delete a student"""
-    class_crud = StudentCRUD(class_name) if class_name else crud
+    class_crud = StudentCRUD(f"students-{class_name}") if class_name else crud
     student = class_crud.get_student_by_id(student_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -292,7 +292,7 @@ async def enroll_student(
     """
     images = [image1, image2, image3, image4, image5]
     
-    class_crud = StudentCRUD(class_name) if class_name else crud
+    class_crud = StudentCRUD(f"students-{class_name}") if class_name else crud
         
     # Check if student already exists in DB
     if class_crud.get_student_by_id(roll_number):
