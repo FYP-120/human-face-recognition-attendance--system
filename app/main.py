@@ -27,8 +27,8 @@ app = FastAPI(
     title="Face Recognition Attendance System (Production)",
     description="Comprehensive attendance management with face recognition",
     version="2.0.0",
-    docs_url=None,
-    redoc_url=None
+    docs_url="/api/docs",
+    redoc_url="/api/redoc"
 )
 
 # ==================== MIDDLEWARE ====================
@@ -262,11 +262,11 @@ async def websocket_camera(
 # ==================== ROOT ENDPOINTS ====================
 
 @app.get("/", tags=["Root"])
-def root(current_user: str = Depends(get_current_user)):
+def root():
     """API root"""
     return {
         "message": "Face Recognition Attendance System API v2.0",
-        "documentation": None,
+        "documentation": "/api/docs",
         "api_version": "2.0.0",
         "status": "running",
         "live_camera": "/camera",
@@ -283,13 +283,13 @@ def root(current_user: str = Depends(get_current_user)):
 
 
 @app.get("/test", tags=["Test"])
-def test_endpoint(current_user: str = Depends(get_current_user)):
+def test_endpoint():
     """Test endpoint"""
     return {"status": "ok", "message": "Server is running"}
 
 
 @app.get("/api", tags=["Root"])
-def api_root(current_user: str = Depends(get_current_user)):
+def api_root():
     """API root"""
     return {
         "version": "2.0.0",

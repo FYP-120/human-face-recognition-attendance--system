@@ -36,6 +36,17 @@ class AttendanceCRUD:
         """Initialize AttendanceCRUD with a dynamically resolved class collection"""
         resolved_name = resolve_attendance_collection(class_name)
         self.collection = get_collection(resolved_name)
+        
+        # Drop any existing TTL index to prevent automatic deletion after 24 hours
+        try:
+            for index_name, index_info in self.collection.index_information().items():
+                if "expireAfterSeconds" in index_info:
+                    self.collection.drop_index(index_name)
+        except Exception:
+            pass
+            
+        # Ensure a standard index is created instead for permanent storage and query optimization
+        self.collection.create_index([("date", 1)])
     
     def mark_attendance(self, attendance: Union[AttendanceModel, Dict]):
         """Create/mark attendance record"""
@@ -95,7 +106,12 @@ class AttendanceCRUD:
     def get_attendance_by_id(self, attendance_id: str) -> Dict:
         """Get a specific attendance record by ID or student_id"""
         try:
-            # First try as MongoDB ObjectId
+            # First try matching by string _id directly
+            result = self.collection.find_one({"_id": attendance_id})
+            if result:
+                return result
+                
+            # Then try as MongoDB ObjectId
             try:
                 result = self.collection.find_one({"_id": ObjectId(attendance_id)})
                 if result:
