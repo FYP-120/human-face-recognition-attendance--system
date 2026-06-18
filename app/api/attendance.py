@@ -38,7 +38,7 @@ def mark_attendance(
         )
 
     local_crud = AttendanceCRUD(class_name)
-    if local_crud.check_attendance(attendance.student_id, today):
+    if local_crud.check_attendance(attendance.student_id, today, subject=attendance.subject):
         raise HTTPException(status_code=400, detail="Attendance already marked today")
 
     attendance.date = today
@@ -52,6 +52,7 @@ def mark_attendance(
 async def mark_attendance_from_image(
     class_name: str = Form(..., description="Target class name"),
     file: UploadFile = File(...),
+    subject: Optional[str] = Form(None, description="Subject name for attendance"),
     current_user: str = Depends(get_current_user)
 ):
     """Mark attendance by uploading student image"""
@@ -93,7 +94,7 @@ async def mark_attendance_from_image(
         student_embeddings = list(zip(sliced_student_ids, sliced_embeddings))
 
         # Process faces and mark attendance, dynamically restricting lookup
-        results = process_multiple_faces(img_rgb, student_embeddings, class_name=class_name)
+        results = process_multiple_faces(img_rgb, student_embeddings, class_name=class_name, subject=subject)
 
         return {
             "message": "Image processed successfully",
@@ -115,7 +116,8 @@ def list_attendance(
     limit: int = Query(10, ge=1, le=1000),
     student_id: str = Query(None),
     date: str = Query(None),
-    class_name: Optional[str] = Query(None)
+    class_name: Optional[str] = Query(None),
+    subject: Optional[str] = Query(None)
 ):
     """Get attendance records with optional filtering"""
     try:
@@ -125,10 +127,23 @@ def list_attendance(
             filter_dict["student_id"] = student_id
         if date:
             filter_dict["date"] = date
+        if subject:
+            filter_dict["subject"] = subject
 
         local_crud = AttendanceCRUD(class_name) if class_name else crud
         records = local_crud.list_attendance(skip, limit, filter_dict)
-        return {"records": records, "count": len(records)}
+
+        # Map display title format
+        for record in records:
+            r_class = class_name or "Unknown Class"
+            r_subject = record.get("subject") or subject or "Unknown Subject"
+            record["display_title"] = f"Attendance for {r_class} - Subject: {r_subject}"
+
+        return {
+            "records": records, 
+            "count": len(records),
+            "summary": f"Attendance for {class_name} - Subject: {subject}" if class_name and subject else None
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching records: {str(e)}")
 
