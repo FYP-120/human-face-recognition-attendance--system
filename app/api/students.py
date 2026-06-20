@@ -287,6 +287,18 @@ def update_student(
     return {"message": "Student updated successfully", "student_id": student_id, "updated_fields": update_data}
 
 
+@router.put("/{student_id}")
+def update_student_put(
+    student_id: str,
+    payload: StudentUpdateRequest,
+    class_name: Optional[str] = Query(None),
+    current_user: str = Depends(get_current_user)
+):
+    """Manually update student profile fields using PUT method"""
+    return update_student(student_id, payload, class_name, current_user)
+
+
+
 # ==================== DELETE ====================
 
 @router.delete("/{student_id}")
