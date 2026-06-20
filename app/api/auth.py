@@ -90,7 +90,10 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
 
     if not user:
         if form_data.username == ADMIN_EMAIL and form_data.password == ADMIN_PASSWORD:
-            access_token = create_access_token(data={"sub": form_data.username})
+            access_token = create_access_token(data={
+                "sub": form_data.username,
+                "is_super_admin": True
+            })
             return {"access_token": access_token, "token_type": "bearer"}
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -105,7 +108,10 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    access_token = create_access_token(data={"sub": user["email"]})
+    access_token = create_access_token(data={
+        "sub": user["email"],
+        "is_super_admin": bool(user.get("is_super_admin", False))
+    })
     return {"access_token": access_token, "token_type": "bearer"}
 
 
@@ -177,6 +183,12 @@ def update_user(
     user_update: UserUpdate,
     current_user: dict = Depends(get_current_user)
 ):
+    if email == ADMIN_EMAIL and current_user.get("email") != ADMIN_EMAIL:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the super admin account itself can update its profile details."
+        )
+
     users_collection = get_collection("users")
     user = users_collection.find_one({"email": email})
     if not user:
@@ -228,6 +240,12 @@ def delete_user(
     email: str,
     current_user: dict = Depends(get_current_user)
 ):
+    if email == ADMIN_EMAIL:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The primary admin account cannot be deleted."
+        )
+
     users_collection = get_collection("users")
     user = users_collection.find_one({"email": email})
     if not user:
