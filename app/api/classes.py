@@ -52,3 +52,18 @@ def create_class(payload: ClassCreateRequest, current_user: str = Depends(get_cu
             status_code=500,
             detail=f"Failed to create class collection: {str(e)}"
         )
+
+@router.get("")
+def list_classes(current_user: str = Depends(get_current_user)):
+    """List all dynamic class names from MongoDB collections"""
+    try:
+        collections = db.list_collection_names()
+        classes = []
+        for col in collections:
+            if col.startswith("students-"):
+                classes.append(col.replace("students-", ""))
+            elif col not in ["users", "admin", "system.indexes", "students", "attendance"]:
+                classes.append(col.replace("_", "-"))
+        return sorted(list(set(classes)))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list classes: {str(e)}")
