@@ -1,7 +1,7 @@
 from app.core.database import get_collection
 from app.models.attendance import AttendanceModel
 from datetime import date, datetime
-from typing import Union, Dict, List
+from typing import Union, Dict, List, Optional
 from bson import ObjectId
 import re
 
@@ -36,6 +36,17 @@ class AttendanceCRUD:
         """Initialize AttendanceCRUD with a dynamically resolved class collection"""
         resolved_name = resolve_attendance_collection(class_name)
         self.collection = get_collection(resolved_name)
+        
+        # Drop any existing TTL index to prevent automatic deletion after 24 hours
+        try:
+            for index_name, index_info in self.collection.index_information().items():
+                if "expireAfterSeconds" in index_info:
+                    self.collection.drop_index(index_name)
+        except Exception:
+            pass
+            
+        # Ensure a standard index is created instead for permanent storage and query optimization
+        self.collection.create_index([("date", 1)])
     
     def mark_attendance(self, attendance: Union[AttendanceModel, Dict]):
         """Create/mark attendance record"""
@@ -44,26 +55,35 @@ class AttendanceCRUD:
         else:
             self.collection.insert_one(attendance)
     
-    def check_attendance(self, student_id: str, attendance_date):
-        """Check if student already marked for the date"""
+    def check_attendance(self, student_id: str, attendance_date, course_name: Optional[str] = None, course_code: Optional[str] = None):
+        """Check if student already marked for the date (and optionally course)"""
         # Handle both date and datetime objects
         if isinstance(attendance_date, datetime):
             # Search by date only (ignore time)
             start_date = attendance_date.replace(hour=0, minute=0, second=0, microsecond=0)
             end_date = attendance_date.replace(hour=23, minute=59, second=59, microsecond=999999)
             query = {
-                "$or": [
-                    {"student_id": student_id, "date": {"$gte": start_date, "$lte": end_date}},
-                ]
+                "student_id": student_id,
+                "date": {"$gte": start_date, "$lte": end_date}
             }
         else:
             query = {"student_id": student_id, "date": attendance_date}
+        
+        if course_name:
+            query["course_name"] = course_name
+        if course_code:
+            query["course_code"] = course_code
         
         result = self.collection.find_one(query)
         
         # If not found with exact ID, try numeric ID match
         if not result:
-            records = list(self.collection.find({}))
+            find_query = {}
+            if course_name:
+                find_query["course_name"] = course_name
+            if course_code:
+                find_query["course_code"] = course_code
+            records = list(self.collection.find(find_query))
             numeric_id = student_id.lstrip('0') if student_id.isdigit() else student_id
             
             for record in records:
@@ -86,7 +106,12 @@ class AttendanceCRUD:
     def get_attendance_by_id(self, attendance_id: str) -> Dict:
         """Get a specific attendance record by ID or student_id"""
         try:
-            # First try as MongoDB ObjectId
+            # First try matching by string _id directly
+            result = self.collection.find_one({"_id": attendance_id})
+            if result:
+                return result
+                
+            # Then try as MongoDB ObjectId
             try:
                 result = self.collection.find_one({"_id": ObjectId(attendance_id)})
                 if result:

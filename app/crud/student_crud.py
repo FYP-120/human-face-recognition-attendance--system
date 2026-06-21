@@ -62,20 +62,21 @@ class StudentCRUD:
     
     def list_students(self, skip: int = 0, limit: int = 50, class_name: Optional[str] = None) -> List[Dict]:
         """List students with pagination"""
+        projection = {"_id": 0, "images": 0, "embedding": 0, "embeddings": 0}
         target_collection = self.collection
         if class_name:
             target_collection = get_collection(f"students-{class_name}")
-            return list(target_collection.find({}, {"_id": 0}).skip(skip).limit(limit))
+            return list(target_collection.find({}, projection).skip(skip).limit(limit))
             
         if self.collection.name == "students":
             from app.core.database import db
-            all_students = list(self.collection.find({}, {"_id": 0}))
+            all_students = list(self.collection.find({}, projection))
             for col_name in db.list_collection_names():
                 if col_name.startswith("students-"):
-                    all_students.extend(list(db[col_name].find({}, {"_id": 0})))
+                    all_students.extend(list(db[col_name].find({}, projection)))
             return all_students[skip:skip+limit]
             
-        return list(self.collection.find({}, {"_id": 0}).skip(skip).limit(limit))
+        return list(self.collection.find({}, projection).skip(skip).limit(limit))
     
     def count_students(self, class_name: Optional[str] = None) -> int:
         """Get total student count"""

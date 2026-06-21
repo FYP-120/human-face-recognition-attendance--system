@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, Query, Form, File, UploadFile
-from app.models.student import StudentModel
+from pydantic import BaseModel, Field
+from app.models.student import StudentModel, StudentsListResponse
 from app.crud.student_crud import StudentCRUD
 from app.core.security import get_current_user
 from app.services.face_embedder import get_embedding
@@ -191,14 +192,15 @@ async def register_student(
 
 # ==================== READ ====================
 
-@router.get("/list")
+@router.get("/list", response_model=StudentsListResponse)
 def list_students(
     skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100),
-    class_name: Optional[str] = Query(None)
+    limit: int = Query(10, ge=1, le=200),
+    class_name: Optional[str] = Query(None),
+    current_user: str = Depends(get_current_user)
 ):
     """Get all students with pagination"""
-    class_crud = StudentCRUD(class_name) if class_name else crud
+    class_crud = StudentCRUD(f"students-{class_name}") if class_name else crud
     students = class_crud.list_students(skip, limit)
     return {"students": students, "count": len(students)}
 
@@ -206,10 +208,11 @@ def list_students(
 @router.get("/search/by-name")
 def search_students_by_name(
     query: str = Query(..., min_length=1),
-    class_name: Optional[str] = Query(None)
+    class_name: Optional[str] = Query(None),
+    current_user: str = Depends(get_current_user)
 ):
     """Search students by name"""
-    class_crud = StudentCRUD(class_name) if class_name else crud
+    class_crud = StudentCRUD(f"students-{class_name}") if class_name else crud
     results = class_crud.search_by_name(query)
     if not results:
         raise HTTPException(status_code=404, detail="No students found")
@@ -219,36 +222,81 @@ def search_students_by_name(
 @router.get("/{student_id}")
 def get_student(
     student_id: str,
-    class_name: Optional[str] = Query(None)
+    class_name: Optional[str] = Query(None),
+    current_user: str = Depends(get_current_user)
 ):
     """Get a specific student by ID"""
-    class_crud = StudentCRUD(class_name) if class_name else crud
+    class_crud = StudentCRUD(f"students-{class_name}") if class_name else crud
     student = class_crud.get_student_by_id(student_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
     return student
 
 
+class StudentUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None)
+    registration_number: Optional[str] = Field(default=None)
+
 # ==================== UPDATE ====================
 
-@router.put("/{student_id}")
+@router.patch("/{student_id}")
 def update_student(
     student_id: str,
-    update_data: dict,
+    payload: StudentUpdateRequest,
     class_name: Optional[str] = Query(None),
     current_user: str = Depends(get_current_user)
 ):
-    """Update student information"""
-    class_crud = StudentCRUD(class_name) if class_name else crud
+    """Manually update student profile fields in MongoDB"""
+    class_crud = StudentCRUD(f"students-{class_name}") if class_name else crud
     student = class_crud.get_student_by_id(student_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
+        
+    # Clean the incoming payload by explicitly filtering out "string" and None values
+    payload_dict = {k: v for k, v in payload.dict(exclude_unset=True).items() if v != "string" and v is not None}
     
-    updated = class_crud.update_student(student_id, update_data)
-    if not updated:
+    update_data = {}
+    if "name" in payload_dict:
+        update_data["name"] = payload_dict["name"]
+    if "registration_number" in payload_dict:
+        update_data["reg_number"] = payload_dict["registration_number"]
+        update_data["student_id"] = payload_dict["registration_number"]
+        
+    if not update_data:
+        return {"message": "No update fields provided", "student_id": student_id}
+        
+    # Resolve the correct collection where the student is located
+    target_collection = class_crud.collection
+    if not class_name and class_crud.collection.name == "students":
+        from app.core.database import db
+        for col_name in db.list_collection_names():
+            if col_name.startswith("students-"):
+                if db[col_name].find_one({"student_id": student_id}):
+                    target_collection = db[col_name]
+                    break
+                    
+    # Update MongoDB using {"$set": update_data} via update_one so unprovided fields remain completely untouched
+    result = target_collection.update_one(
+        {"student_id": student_id},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
         raise HTTPException(status_code=400, detail="Failed to update student")
-    
-    return {"message": "Student updated successfully", "student_id": student_id}
+        
+    return {"message": "Student updated successfully", "student_id": student_id, "updated_fields": update_data}
+
+
+@router.put("/{student_id}")
+def update_student_put(
+    student_id: str,
+    payload: StudentUpdateRequest,
+    class_name: Optional[str] = Query(None),
+    current_user: str = Depends(get_current_user)
+):
+    """Manually update student profile fields using PUT method"""
+    return update_student(student_id, payload, class_name, current_user)
+
 
 
 # ==================== DELETE ====================
@@ -259,14 +307,37 @@ def delete_student(
     class_name: Optional[str] = Query(None),
     current_user: str = Depends(get_current_user)
 ):
-    """Delete a student"""
-    class_crud = StudentCRUD(class_name) if class_name else crud
+    """Manually delete a student and completely remove their metadata and files from the system"""
+    class_crud = StudentCRUD(f"students-{class_name}") if class_name else crud
     student = class_crud.get_student_by_id(student_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
     
+    # Clean up associated files/directories from disk
+    import shutil
+    image_paths = student.get("image_paths", [])
+    deleted_dirs = set()
+    for img_path in image_paths:
+        dir_path = os.path.dirname(img_path)
+        if dir_path and dir_path not in deleted_dirs:
+            if os.path.exists(dir_path):
+                try:
+                    shutil.rmtree(dir_path)
+                    deleted_dirs.add(dir_path)
+                except Exception:
+                    pass
+                    
+    # Clean up raw datasets directory if it exists
+    raw_folder = os.path.join("datasets", "raw", student_id)
+    if os.path.exists(raw_folder):
+        try:
+            shutil.rmtree(raw_folder)
+        except Exception:
+            pass
+            
+    # Delete metadata from MongoDB
     class_crud.delete_student(student_id)
-    return {"message": "Student deleted successfully", "student_id": student_id}
+    return {"message": "Student completely deleted from system", "student_id": student_id}
 
 
 # ==================== ENROLL (AUTOMATED ONBOARDING) ====================
@@ -292,7 +363,7 @@ async def enroll_student(
     """
     images = [image1, image2, image3, image4, image5]
     
-    class_crud = StudentCRUD(class_name) if class_name else crud
+    class_crud = StudentCRUD(f"students-{class_name}") if class_name else crud
         
     # Check if student already exists in DB
     if class_crud.get_student_by_id(roll_number):
@@ -383,3 +454,90 @@ async def enroll_student(
             except Exception:
                 pass
         raise e
+
+# ==================== IDENTIFY (FACE RECOGNITION) ====================
+
+@router.post("/identify")
+async def identify_student(
+    file: UploadFile = File(...),
+    current_user: str = Depends(get_current_user)
+):
+    """
+    Identify a student from an uploaded face image:
+    1. Extract face embedding from the uploaded image.
+    2. Compare the embedding against the global embeddings database.
+    3. Query MongoDB to retrieve the student's metadata and class name.
+    """
+    from app.services.face_matcher import cosine_similarity
+    from app.core.config import EMBEDDINGS_DIR
+    
+    try:
+        EMBEDDINGS_FILE = os.path.join(EMBEDDINGS_DIR, "student_embeddings.npy")
+        if not os.path.exists(EMBEDDINGS_FILE):
+            raise HTTPException(status_code=500, detail="Embeddings database file not found")
+
+        # Load global embeddings database
+        embeddings_data = np.load(EMBEDDINGS_FILE, allow_pickle=True).item()
+        student_ids = list(embeddings_data.get("student_ids", []))
+        embeddings = list(embeddings_data.get("embeddings", []))
+
+        if not student_ids:
+            raise HTTPException(status_code=400, detail="No registered student embeddings found")
+
+        # Read and decode image
+        contents = await file.read()
+        nparr = np.frombuffer(contents, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if img is None:
+            raise HTTPException(status_code=400, detail="Invalid image format")
+
+        # Convert BGR to RGB
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        # Extract face embedding
+        emb = get_embedding(img_rgb)
+        if emb is None:
+            raise HTTPException(status_code=400, detail="No face detected in the image")
+
+        # Match against all registered student embeddings
+        best_score = 0
+        best_student_id = None
+        THRESHOLD = 0.6
+
+        for idx, registered_emb in enumerate(embeddings):
+            score = cosine_similarity(emb, registered_emb)
+            if score > best_score:
+                best_score = score
+                best_student_id = student_ids[idx]
+
+        if best_score < THRESHOLD or not best_student_id:
+            raise HTTPException(status_code=404, detail="No matching student found")
+
+        # Query MongoDB dynamically to fetch the student's record and class name
+        from app.core.database import db
+        student_doc = None
+        matched_class = None
+
+        for col_name in db.list_collection_names():
+            if col_name.startswith("students-"):
+                col = db[col_name]
+                student_doc = col.find_one({"student_id": best_student_id})
+                if student_doc:
+                    matched_class = col_name.replace("students-", "")
+                    break
+
+        if not student_doc:
+            raise HTTPException(status_code=404, detail="Student metadata not found in database")
+
+        return {
+            "name": student_doc.get("name"),
+            "registration_number": student_doc.get("reg_number") or best_student_id,
+            "class": matched_class,
+            "confidence": float(best_score)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to identify student: {str(e)}")

@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 import re
 from app.core.database import db
+from app.core.security import get_current_user
 
 router = APIRouter()
 
@@ -9,7 +10,7 @@ class ClassCreateRequest(BaseModel):
     class_name: str = Field(..., description="Name of the class (e.g., BSCS-8A)")
 
 @router.post("/create")
-def create_class(payload: ClassCreateRequest):
+def create_class(payload: ClassCreateRequest, current_user: str = Depends(get_current_user)):
     """
     Create a new class by dynamically creating/initializing a dedicated
     MongoDB collection for storing student records.
@@ -51,3 +52,18 @@ def create_class(payload: ClassCreateRequest):
             status_code=500,
             detail=f"Failed to create class collection: {str(e)}"
         )
+
+@router.get("")
+def list_classes(current_user: str = Depends(get_current_user)):
+    """List all dynamic class names from MongoDB collections"""
+    try:
+        collections = db.list_collection_names()
+        classes = []
+        for col in collections:
+            if col.startswith("students-"):
+                classes.append(col.replace("students-", ""))
+            elif col not in ["users", "admin", "system.indexes", "students", "attendance"]:
+                classes.append(col.replace("_", "-"))
+        return sorted(list(set(classes)))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list classes: {str(e)}")
